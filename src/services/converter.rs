@@ -67,7 +67,7 @@ Do not use JSON tool calls. Use the XML format above.";
         );
         for msg in req_messages {
             if let Ok(chat_msg) = serde_json::from_value::<ChatMessage>(msg.clone()) {
-                messages.push(chat_msg);
+                messages.push(normalize_chat_message_role(chat_msg));
             }
         }
     }
@@ -148,6 +148,8 @@ Do not use JSON tool calls. Use the XML format above.";
                                 accumulated_reasoning.clear();
                             }
 
+                            let chat_role = normalize_chat_role(role);
+
                             // If assistant message and we have pending tool calls, add them to the message
                             if role == "assistant" && !pending_tool_calls.is_empty() {
                                 log::info!(
@@ -155,7 +157,7 @@ Do not use JSON tool calls. Use the XML format above.";
                                     pending_tool_calls.len()
                                 );
                                 messages.push(ChatMessage {
-                                    role: role.clone(),
+                                    role: chat_role.clone(),
                                     content: Some(msg_content),
                                     tool_calls: Some(pending_tool_calls.clone()),
                                     tool_call_id: None,
@@ -163,7 +165,7 @@ Do not use JSON tool calls. Use the XML format above.";
                                 pending_tool_calls.clear();
                             } else {
                                 messages.push(ChatMessage {
-                                    role: role.clone(),
+                                    role: chat_role,
                                     content: Some(msg_content),
                                     tool_calls: None,
                                     tool_call_id: None,
@@ -360,6 +362,19 @@ Do not use JSON tool calls. Use the XML format above.";
         function_call: req.function_call.clone(),
         functions: req.functions.clone(),
     })
+}
+
+fn normalize_chat_message_role(mut message: ChatMessage) -> ChatMessage {
+    message.role = normalize_chat_role(&message.role);
+    message
+}
+
+fn normalize_chat_role(role: &str) -> String {
+    match role {
+        // OpenAI Responses uses `developer`; Ark Chat Completions rejects it.
+        "developer" => "system".to_string(),
+        other => other.to_string(),
+    }
 }
 
 /// Convert ResponseContent to JSON value for Chat Completions
