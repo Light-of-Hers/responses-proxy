@@ -1206,7 +1206,12 @@ pub async fn create_response(
                         for tc in tool_calls_delta {
                             let call_state = tool_calls.entry(tc.index).or_insert_with(|| {
                                 let fallback_id = format!("call_{}_{}", request_id, tc.index);
-                                let call_id = tc.id.clone().unwrap_or_else(|| fallback_id.clone());
+                                let call_id = tc
+                                    .id
+                                    .as_ref()
+                                    .filter(|id| !id.trim().is_empty())
+                                    .cloned()
+                                    .unwrap_or_else(|| fallback_id.clone());
                                 ToolCallState {
                                     call_id: call_id.clone(),
                                     item_id: call_id,
@@ -1224,8 +1229,10 @@ pub async fn create_response(
 
                             // Update ID if provided
                             if let Some(ref id) = tc.id {
-                                call_state.call_id = id.clone();
-                                call_state.item_id = id.clone();
+                                if !id.trim().is_empty() {
+                                    call_state.call_id = id.clone();
+                                    call_state.item_id = id.clone();
+                                }
                             }
 
                             // Update type if provided

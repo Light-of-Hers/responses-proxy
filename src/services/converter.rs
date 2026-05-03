@@ -3,6 +3,7 @@ use crate::models::{
     ResponseInput, ResponseInputItem, ResponseRequest,
 };
 use serde_json::{json, Value};
+use std::collections::VecDeque;
 
 /// Convert OpenAI Responses API request to Chat Completions format
 pub fn convert_to_chat_completions(
@@ -86,6 +87,8 @@ Do not use JSON tool calls. Use the XML format above.";
             ResponseInput::Array(items) => {
                 let mut accumulated_reasoning: Vec<String> = Vec::new();
                 let mut pending_tool_calls: Vec<Value> = Vec::new();
+                let mut pending_generated_call_ids: VecDeque<String> = VecDeque::new();
+                let mut generated_call_id_counter = 0usize;
 
                 for item in items {
                     match item {
@@ -109,10 +112,17 @@ Do not use JSON tool calls. Use the XML format above.";
                             }
 
                             if role == "tool" {
+                                flush_pending_tool_calls(&mut messages, &mut pending_tool_calls);
+
                                 let call_id = tool_call_id.clone().ok_or_else(|| {
                                     log::error!("❌ Tool role message missing tool_call_id");
                                     "tool_message_missing_tool_call_id".to_string()
                                 })?;
+                                let call_id = normalize_tool_output_call_id(
+                                    &call_id,
+                                    &mut pending_generated_call_ids,
+                                    &mut generated_call_id_counter,
+                                );
 
                                 let tool_payload = extract_tool_message_body(content)?;
 
@@ -159,10 +169,9 @@ Do not use JSON tool calls. Use the XML format above.";
                                 messages.push(ChatMessage {
                                     role: chat_role.clone(),
                                     content: Some(msg_content),
-                                    tool_calls: Some(pending_tool_calls.clone()),
+                                    tool_calls: Some(std::mem::take(&mut pending_tool_calls)),
                                     tool_call_id: None,
                                 });
-                                pending_tool_calls.clear();
                             } else {
                                 messages.push(ChatMessage {
                                     role: chat_role,
@@ -177,6 +186,11 @@ Do not use JSON tool calls. Use the XML format above.";
                             name,
                             arguments,
                         } => {
+                            let call_id = normalize_tool_call_id(
+                                call_id,
+                                &mut pending_generated_call_ids,
+                                &mut generated_call_id_counter,
+                            );
                             // Accumulate tool calls to attach to the next assistant message
                             pending_tool_calls.push(json!({
                                 "id": call_id,
@@ -207,6 +221,12 @@ Do not use JSON tool calls. Use the XML format above.";
                                 // Already a plain string
                                 output.clone()
                             };
+                            flush_pending_tool_calls(&mut messages, &mut pending_tool_calls);
+                            let call_id = normalize_tool_output_call_id(
+                                call_id,
+                                &mut pending_generated_call_ids,
+                                &mut generated_call_id_counter,
+                            );
 
                             messages.push(ChatMessage {
                                 role: "tool".to_string(),
@@ -245,7 +265,7 @@ Do not use JSON tool calls. Use the XML format above.";
 
                 // If tool calls remain, we need to create an assistant message for them
                 if !pending_tool_calls.is_empty() {
-                    log::warn!("⚠️  {} tool call(s) found but no assistant message to attach to - tool calls may not work correctly", pending_tool_calls.len());
+                    flush_pending_tool_calls(&mut messages, &mut pending_tool_calls);
                 }
             }
         }
@@ -375,6 +395,57 @@ fn normalize_chat_role(role: &str) -> String {
         "developer" => "system".to_string(),
         other => other.to_string(),
     }
+}
+
+fn flush_pending_tool_calls(messages: &mut Vec<ChatMessage>, pending_tool_calls: &mut Vec<Value>) {
+    if pending_tool_calls.is_empty() {
+        return;
+    }
+
+    log::info!(
+        "🔧 Added {} pending tool call(s) to synthetic assistant message",
+        pending_tool_calls.len()
+    );
+    messages.push(ChatMessage {
+        role: "assistant".to_string(),
+        content: None,
+        tool_calls: Some(std::mem::take(pending_tool_calls)),
+        tool_call_id: None,
+    });
+}
+
+fn normalize_tool_call_id(
+    call_id: &str,
+    pending_generated_call_ids: &mut VecDeque<String>,
+    generated_call_id_counter: &mut usize,
+) -> String {
+    if !call_id.trim().is_empty() {
+        return call_id.to_string();
+    }
+
+    let generated = next_generated_tool_call_id(generated_call_id_counter);
+    pending_generated_call_ids.push_back(generated.clone());
+    generated
+}
+
+fn normalize_tool_output_call_id(
+    call_id: &str,
+    pending_generated_call_ids: &mut VecDeque<String>,
+    generated_call_id_counter: &mut usize,
+) -> String {
+    if !call_id.trim().is_empty() {
+        return call_id.to_string();
+    }
+
+    pending_generated_call_ids
+        .pop_front()
+        .unwrap_or_else(|| next_generated_tool_call_id(generated_call_id_counter))
+}
+
+fn next_generated_tool_call_id(generated_call_id_counter: &mut usize) -> String {
+    let id = format!("call_proxy_{}", generated_call_id_counter);
+    *generated_call_id_counter += 1;
+    id
 }
 
 /// Convert ResponseContent to JSON value for Chat Completions
