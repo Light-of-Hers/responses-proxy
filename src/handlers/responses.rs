@@ -577,7 +577,9 @@ pub async fn create_response(
 
     // Handle non-success responses
     if !status.is_success() {
-        record_circuit_breaker_failure(app.circuit_breaker.clone());
+        if status.is_server_error() {
+            record_circuit_breaker_failure(app.circuit_breaker.clone());
+        }
 
         let error_body = read_bounded_error(res).await;
 
