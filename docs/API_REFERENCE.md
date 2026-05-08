@@ -416,6 +416,10 @@ The following features from the full Responses API spec are **intentionally not 
 - ❌ `reasoning.effort` - o-series model control
 - ❌ `include` - optional data inclusion
 
+**Partial support:**
+- ⚠️ `input_file` with inline `file_data` or `file_url` is preserved as text best-effort payload
+- ❌ `input_file` with only `file_id` remains unsupported
+
 **Why These Limitations Exist:**
 
 This proxy translates Responses API → Chat Completions API → Responses API for **stateless operation** with standard backends like:
@@ -653,4 +657,3 @@ This proxy provides **complete compliance** with the core Responses API for:
 With clear **documented limitations** for features that require native Responses API backends or stateful storage.
 
 **Perfect for:** Translating Responses API clients to work with any OpenAI-compatible Chat Completions backend.
-

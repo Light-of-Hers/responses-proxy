@@ -471,17 +471,20 @@ fn convert_response_content(content: &ResponseContent) -> Result<(Value, Option<
         ResponseContent::String(text) => Ok((json!(text), None)),
         ResponseContent::Array(parts) => {
             let mut reasoning_text = String::new();
+            let mut text_parts: Vec<String> = Vec::new();
             let mut converted: Vec<Value> = Vec::new();
 
             for part in parts {
                 match part {
                     ContentPart::InputText { text } | ContentPart::OutputText { text } => {
+                        text_parts.push(text.clone());
                         converted.push(json!({
                             "type": "text",
                             "text": text
                         }));
                     }
                     ContentPart::ToolOutput { body, .. } => {
+                        text_parts.push(body.clone());
                         converted.push(json!({
                             "type": "text",
                             "text": body
@@ -496,7 +499,12 @@ fn convert_response_content(content: &ResponseContent) -> Result<(Value, Option<
                         }));
                     }
                     ContentPart::InputFile { .. } => {
-                        return Err("input_file_content_not_supported".to_string());
+                        let rendered = render_inline_file_part(part)?;
+                        text_parts.push(rendered.clone());
+                        converted.push(json!({
+                            "type": "text",
+                            "text": rendered
+                        }));
                     }
                     ContentPart::Reasoning { text, .. } => {
                         // Reasoning within message content - accumulate for <think> tags
@@ -519,17 +527,7 @@ fn convert_response_content(content: &ResponseContent) -> Result<(Value, Option<
             let has_reasoning = !reasoning_text.is_empty();
 
             if !has_images && !converted.is_empty() {
-                let text: String = parts
-                    .iter()
-                    .filter_map(|p| match p {
-                        ContentPart::InputText { text } | ContentPart::OutputText { text } => {
-                            Some(text.as_str())
-                        }
-                        ContentPart::ToolOutput { body, .. } => Some(body.as_str()),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
+                let text = text_parts.join("\n");
                 Ok((
                     json!(text),
                     if has_reasoning {
@@ -549,6 +547,33 @@ fn convert_response_content(content: &ResponseContent) -> Result<(Value, Option<
                 ))
             }
         }
+    }
+}
+
+fn render_inline_file_part(part: &ContentPart) -> Result<String, String> {
+    match part {
+        ContentPart::InputFile {
+            file_id,
+            filename,
+            file_url,
+            file_data,
+        } => {
+            let label = filename
+                .as_deref()
+                .or(file_id.as_deref())
+                .unwrap_or("input_file");
+
+            if let Some(data) = file_data.as_ref().filter(|s| !s.trim().is_empty()) {
+                return Ok(format!("[input_file:{label}]\n{data}"));
+            }
+
+            if let Some(url) = file_url.as_ref().filter(|s| !s.trim().is_empty()) {
+                return Ok(format!("[input_file:{label}]\n{url}"));
+            }
+
+            Err("input_file_content_not_supported".to_string())
+        }
+        _ => Err("input_file_content_not_supported".to_string()),
     }
 }
 
@@ -601,5 +626,37 @@ pub fn translate_finish_reason(finish_reason: Option<&str>) -> &'static str {
         Some("tool_calls") => "completed",
         Some(_) => "completed",
         None => "in_progress",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inline_file_data_is_preserved_as_text() {
+        let content = ResponseContent::Array(vec![ContentPart::InputFile {
+            file_id: None,
+            filename: Some("notes.txt".to_string()),
+            file_url: None,
+            file_data: Some("hello world".to_string()),
+        }]);
+
+        let (converted, reasoning) = convert_response_content(&content).unwrap();
+        assert!(reasoning.is_none());
+        assert_eq!(converted, json!("[input_file:notes.txt]\nhello world"));
+    }
+
+    #[test]
+    fn file_id_only_is_still_rejected() {
+        let content = ResponseContent::Array(vec![ContentPart::InputFile {
+            file_id: Some("file_123".to_string()),
+            filename: None,
+            file_url: None,
+            file_data: None,
+        }]);
+
+        let err = convert_response_content(&content).unwrap_err();
+        assert_eq!(err, "input_file_content_not_supported");
     }
 }

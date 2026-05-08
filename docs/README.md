@@ -133,7 +133,7 @@ CADDY_TLS=true
 |-----------------|---------|---------|-------|
 | **Input Types** | Text (`input_text`) | ✅ Full | String or structured messages |
 | | Images (`input_image`) | ✅ Full | Image URLs in content array |
-| | Files (`input_file`) | ❌ Not supported | Chat Completions limitation |
+| | Files (`input_file`) | ⚠️ Partial | Inline `file_data` / `file_url` are preserved as text; opaque `file_id` is still rejected |
 | | Audio (`input_audio`) | ❌ Not supported | Chat Completions limitation |
 | | Multi-turn messages | ✅ Full | Array of message items |
 | | Reasoning items | ✅ Full | Converted to `<think>` tags |
@@ -177,7 +177,7 @@ CADDY_TLS=true
 ### Limitations (Chat Completions Backend)
 
 **Not Supported (by design):**
-- File inputs (`input_file`) - Requires native file handling
+- Opaque file inputs (`input_file` with only `file_id`) - Requires native file handling
 - Audio inputs/outputs - Requires audio-enabled models
 - Advanced tool types - `web_search`, `file_search`, `code_interpreter`, etc.
 - Structured output parameters - `text.format`, `reasoning.effort`
