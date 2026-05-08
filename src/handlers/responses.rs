@@ -20,8 +20,8 @@ const MAX_ERROR_BODY_SIZE: usize = 10 * 1024;
 const MAX_INPUT_CONTENT_SIZE: usize = 5 * 1024 * 1024;
 const REALTIME_ITEM_OBJECT: &str = "realtime.item";
 use crate::models::{
-    App, ChatCompletionChunk, IncompleteDetails, OutputContent, OutputItem, Response,
-    ResponseReasoningState, ResponseRequest, StreamEvent, TokenDetails, Usage,
+    App, ChatCompletionChunk, ChatCompletionRequest, IncompleteDetails, OutputContent, OutputItem,
+    Response, ResponseReasoningState, ResponseRequest, StreamEvent, TokenDetails, Usage,
 };
 use crate::services::{
     build_model_list_content, convert_to_chat_completions, extract_client_key,
@@ -541,6 +541,7 @@ pub async fn create_response(
         chat_req.stream,
         app.backend_url
     );
+    let estimated_input_tokens = estimate_chat_request_input_tokens(&chat_req);
 
     // Build the backend request
     let mut backend_req = app
@@ -1648,6 +1649,20 @@ pub async fn create_response(
         // Add all tool calls to output
         output_items.append(&mut final_tool_calls);
 
+        if total_input_tokens == 0 && total_output_tokens == 0 {
+            total_input_tokens = estimated_input_tokens;
+            total_output_tokens = estimate_stream_output_tokens(
+                &accumulated_text,
+                &accumulated_reasoning,
+                &sorted_calls_clone,
+            );
+            log::warn!(
+                "⚠️ Backend did not provide usage; using estimated usage input={} output={}",
+                total_input_tokens,
+                total_output_tokens
+            );
+        }
+
         // Determine incomplete_details if status is incomplete
         let incomplete_details = if final_status == "incomplete" {
             Some(IncompleteDetails {
@@ -1858,6 +1873,39 @@ fn estimate_input_size(input: &crate::models::ResponseInput) -> usize {
             })
             .sum(),
     }
+}
+
+fn estimate_chat_request_input_tokens(chat_req: &ChatCompletionRequest) -> u32 {
+    let Ok(body) = serde_json::to_vec(chat_req) else {
+        return 0;
+    };
+
+    estimate_token_count_from_bytes(body.len())
+}
+
+fn estimate_stream_output_tokens(
+    accumulated_text: &str,
+    accumulated_reasoning: &str,
+    tool_calls: &[(usize, ToolCallState)],
+) -> u32 {
+    let tool_call_bytes: usize = tool_calls
+        .iter()
+        .map(|(_, call_state)| {
+            call_state.name.as_deref().unwrap_or("").len() + call_state.arguments.len()
+        })
+        .sum();
+    let output_bytes = accumulated_text.len() + accumulated_reasoning.len() + tool_call_bytes;
+
+    estimate_token_count_from_bytes(output_bytes)
+}
+
+fn estimate_token_count_from_bytes(bytes: usize) -> u32 {
+    if bytes == 0 {
+        return 0;
+    }
+
+    let estimate = bytes.saturating_add(2) / 3;
+    estimate.min(u32::MAX as usize).max(1) as u32
 }
 
 fn extract_text_delta(value: &Value) -> Option<String> {

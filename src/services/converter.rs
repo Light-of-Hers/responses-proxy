@@ -1,6 +1,6 @@
 use crate::models::{
     ChatCompletionRequest, ChatFunction, ChatMessage, ChatTool, ContentPart, ResponseContent,
-    ResponseInput, ResponseInputItem, ResponseRequest,
+    ResponseInput, ResponseInputItem, ResponseRequest, StreamOptions,
 };
 use serde_json::{json, Value};
 use std::collections::VecDeque;
@@ -343,6 +343,8 @@ Do not use JSON tool calls. Use the XML format above.";
             ToolChoice::Specific(spec) => json!(spec),
         }
     });
+    let stream = req.stream.unwrap_or(false);
+    let stream_options = chat_stream_options(req.stream_options.as_ref(), stream);
 
     Ok(ChatCompletionRequest {
         model,
@@ -357,7 +359,7 @@ Do not use JSON tool calls. Use the XML format above.";
         user: req.user.clone(),
         logprobs,
         top_logprobs,
-        stream: req.stream.unwrap_or(false),
+        stream,
         stop: req.stop.clone(),
         frequency_penalty: req.frequency_penalty,
         presence_penalty: req.presence_penalty,
@@ -367,10 +369,7 @@ Do not use JSON tool calls. Use the XML format above.";
         service_tier: req.service_tier.clone(),
         store: req.store,
         n: req.n,
-        stream_options: req
-            .stream_options
-            .as_ref()
-            .map(|so| serde_json::to_value(so).unwrap_or(json!({}))),
+        stream_options,
         max_completion_tokens: req.max_completion_tokens,
         modalities: req.modalities.clone(),
         prediction: req.prediction.clone(),
@@ -394,6 +393,23 @@ fn normalize_chat_role(role: &str) -> String {
         // OpenAI Responses uses `developer`; Ark Chat Completions rejects it.
         "developer" => "system".to_string(),
         other => other.to_string(),
+    }
+}
+
+fn chat_stream_options(stream_options: Option<&StreamOptions>, stream: bool) -> Option<Value> {
+    if !stream {
+        return stream_options.and_then(|options| serde_json::to_value(options).ok());
+    }
+
+    let mut value = stream_options
+        .and_then(|options| serde_json::to_value(options).ok())
+        .unwrap_or_else(|| json!({}));
+    match &mut value {
+        Value::Object(map) => {
+            map.insert("include_usage".to_string(), Value::Bool(true));
+            Some(value)
+        }
+        _ => Some(json!({ "include_usage": true })),
     }
 }
 
