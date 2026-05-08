@@ -3,7 +3,7 @@ use axum::{
     Router,
 };
 use log::info;
-use std::{env, sync::Arc, time::Duration};
+use std::{env, net::SocketAddr, sync::Arc, time::Duration};
 use tokio::sync::RwLock;
 
 // Import our modules
@@ -103,10 +103,29 @@ async fn main() {
         .unwrap_or_else(|_| "8282".into())
         .parse::<u16>()
         .unwrap_or(8282);
-    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port))
-        .await
-        .unwrap();
-    info!("   Listening on: 0.0.0.0:{}", port);
+    let listen_addr = SocketAddr::from(([0, 0, 0, 0], port));
+    let socket = match tokio::net::TcpSocket::new_v4() {
+        Ok(socket) => socket,
+        Err(e) => {
+            log::error!("Failed to create TCP socket: {}", e);
+            std::process::exit(1);
+        }
+    };
+    if let Err(e) = socket.set_reuseaddr(true) {
+        log::warn!("Failed to enable SO_REUSEADDR: {}", e);
+    }
+    if let Err(e) = socket.bind(listen_addr) {
+        log::error!("Failed to bind to {}: {}", listen_addr, e);
+        std::process::exit(1);
+    }
+    let listener = match socket.listen(1024) {
+        Ok(listener) => listener,
+        Err(e) => {
+            log::error!("Failed to listen on {}: {}", listen_addr, e);
+            std::process::exit(1);
+        }
+    };
+    info!("   Listening on: {}", listen_addr);
 
     // Graceful shutdown
     let server = axum::serve(listener, router).with_graceful_shutdown(async {
