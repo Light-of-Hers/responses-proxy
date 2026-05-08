@@ -68,20 +68,12 @@ async fn main() {
         circuit_breaker: circuit_breaker.clone(),
     };
 
-    // Initial model cache load
-    info!("🔄 Loading initial model cache...");
-    if let Err(e) = refresh_models_cache(&app).await {
-        log::warn!(
-            "⚠️  Failed to load initial model cache: {}. Continuing anyway.",
-            e
-        );
-    }
-
     // Background model cache refresh (every 60s) with graceful shutdown
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::channel::<()>(1);
     let cache_task = {
         let app_clone = app.clone();
         tokio::spawn(async move {
+            info!("🔄 Loading initial model cache in background...");
             loop {
                 if let Err(e) = refresh_models_cache(&app_clone).await {
                     log::warn!("Failed to refresh models cache: {}", e);
